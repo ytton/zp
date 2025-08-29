@@ -248,14 +248,13 @@ async function handleListPasswords() {
   console.log('');
 
   passwords.forEach((p, index) => {
-    const maskedPassword = maskPassword(p.value);
     const label = p.label ? chalk.gray(`(${p.label})`) : '';
     const usage = chalk.gray(`使用: ${p.usageCount} 次`);
     const added = chalk.gray(
       `添加: ${new Date(p.addedAt).toLocaleDateString()}`
     );
 
-    console.log(`${index + 1}. ${chalk.cyan(maskedPassword)} ${label}`);
+    console.log(`${index + 1}. ${chalk.cyan(p.value)} ${label}`);
     console.log(`   ${usage}, ${added}`);
   });
 }

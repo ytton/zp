@@ -2,19 +2,36 @@ import chalk from 'chalk';
 import cliProgress from 'cli-progress';
 import inquirer from 'inquirer';
 import Table from 'cli-table3';
+import path from 'path';
+import { getArchiveInfo } from '../core/sevenZip.js';
 
 /**
  * Display scan results in a formatted table
  */
-function displayScanResults(archiveFiles) {
+async function displayScanResults(archiveFiles) {
   if (archiveFiles.length === 0) {
     console.log(chalk.yellow('⚠️  未找到压缩文件'));
     return;
   }
 
+  // 获取每个文件的详细信息
+  const filesWithInfo = await Promise.all(
+    archiveFiles.map(async (file) => {
+      try {
+        const info = await getArchiveInfo(file.filePath);
+        return { ...file, archiveInfo: info };
+      } catch (err) {
+        return { ...file, archiveInfo: null };
+      }
+    })
+  );
+
+  // 分组处理分卷文件
+  const groupedFiles = groupVolumeFiles(filesWithInfo);
+
   console.log(
     chalk.green(
-      `✓ 发现 ${archiveFiles.length} 个压缩文件`
+      `✓ 发现 ${archiveFiles.length} 个压缩文件 (${groupedFiles.length} 组)`
     )
   );
   console.log('');
@@ -24,10 +41,9 @@ function displayScanResults(archiveFiles) {
     head: [
       chalk.bold('File Name'),
       chalk.bold('Format'),
-      chalk.bold('Size'),
-      chalk.bold('Path')
+      chalk.bold('Size')
     ],
-    colWidths: [35, 12, 12, 40],
+    colWidths: [50, 15, 12],
     style: {
       head: ['cyan'],
       border: ['gray']
@@ -35,15 +51,14 @@ function displayScanResults(archiveFiles) {
   });
 
   // Add rows to table
-  archiveFiles.forEach(file => {
-    const displayInfo = getDisplayInfo(file);
-    const icon = formatFileIcon(file);
+  groupedFiles.forEach(fileGroup => {
+    const displayInfo = getDisplayInfo(fileGroup);
+    const icon = formatFileIcon(fileGroup);
 
     table.push([
       icon + displayInfo.displayName,
       displayInfo.displayFormat,
-      displayInfo.size,
-      displayInfo.path
+      displayInfo.size
     ]);
   });
 
@@ -191,16 +206,16 @@ function displayExtractionSummary(summary, outputDir) {
   const table = new Table({
     style: {
       head: ['cyan'],
-      border: ['gray']
-    }
+      border: ['gray'],
+    },
   });
 
   table.push(
     [chalk.bold('总计'), `${summary.totalFiles} 个文件`],
     [chalk.green('✓ 成功'), String(summary.successCount)],
     [chalk.red('✗ 失败'), String(summary.failedCount)],
-    [chalk.blue('📁 输出目录'), truncateString(outputDir, 40)],
-    [chalk.gray('⏱️  总耗时'), `${summary.totalTime}s`]
+    [chalk.blue('→ 输出目录'), truncateString(outputDir, 40)],
+    [chalk.gray('⏱ 总耗时'), `${summary.totalTime}s`]
   );
 
   console.log(table.toString());
@@ -215,8 +230,8 @@ function displayExtractionSummary(summary, outputDir) {
       colWidths: [40, 40],
       style: {
         head: ['red'],
-        border: ['gray']
-      }
+        border: ['gray'],
+      },
     });
 
     summary.failedFiles.forEach(file => {
@@ -236,22 +251,20 @@ async function askDeleteConfirmation(successfulFiles) {
     return false;
   }
 
-  console.log(
-    chalk.yellow(
-      `❓ 是否删除 ${successfulFiles.length} 个已成功解压的压缩文件?`
-    )
-  );
-
-  const { shouldDelete } = await inquirer.prompt([
+  const { choice } = await inquirer.prompt([
     {
-      type: 'confirm',
-      name: 'shouldDelete',
+      type: 'list',
+      name: 'choice',
       message: `是否删除 ${successfulFiles.length} 个已成功解压的压缩文件?`,
-      default: false,
+      choices: [
+        { name: '否，保留原始文件', value: false },
+        { name: '是，删除原始文件', value: true },
+      ],
+      default: 0,
     },
   ]);
 
-  return shouldDelete;
+  return choice;
 }
 
 /**
@@ -275,7 +288,7 @@ function getDisplayName(archiveFile) {
 
 function getDisplayInfo(archiveFile) {
   // Format file size
-  const formatSize = (bytes) => {
+  const formatSize = bytes => {
     if (bytes === 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
@@ -284,33 +297,68 @@ function getDisplayInfo(archiveFile) {
   };
 
   // Get display format
-  const getDisplayFormat = (file) => {
-    if (file.isVolume) {
-      return 'Volume Set';
+  const getDisplayFormat = file => {
+    // 使用 archiveInfo 中的格式信息
+    let format = 'UNKNOWN';
+    if (file.archiveInfo && file.archiveInfo.format) {
+      format = file.archiveInfo.format;
     }
 
-    const ext = file.extension.toLowerCase();
-    const formatMap = {
-      '.zip': 'ZIP',
-      '.rar': 'RAR',
-      '.7z': '7-Zip',
-      '.tar': 'TAR',
-      '.gz': 'GZIP',
-      '.bz2': 'BZIP2',
-      '.xz': 'XZ',
-      '.iso': 'ISO',
-      '.cab': 'CAB',
-      '.dmg': 'DMG'
-    };
+    // 添加标记
+    const tags = [];
 
-    return formatMap[ext] || ext.toUpperCase().substring(1);
+    // 检查是否是伪装文件：文件扩展名不是压缩格式
+    const ext = file.extension.toLowerCase();
+    const archiveExts = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.iso', '.cab', '.dmg'];
+    if (!archiveExts.includes(ext) && !isMultiPartFile(file.fileName)) {
+      tags.push(chalk.gray('[伪装]'));
+    }
+
+    // 检查是否是分卷文件
+    if (file.isVolume || isMultiPartFile(file.fileName) || file.volumeFiles) {
+      tags.push(chalk.gray('[分卷]'));
+    }
+
+    return format + (tags.length > 0 ? ' ' + tags.join(' ') : '');
   };
 
+  // 获取显示名称
+  const getDisplayNameWithVolumes = (file) => {
+    let name = '';
+
+    if (file.volumeFiles && file.volumeFiles.length > 1) {
+      const baseName = getVolumeBaseName(file.fileName);
+      const firstNum = getVolumeNumber(file.volumeFiles[0]);
+      const lastNum = getVolumeNumber(file.volumeFiles[file.volumeFiles.length - 1]);
+      name = `${baseName}.${firstNum}-${lastNum}`;
+    } else {
+      name = file.fileName;
+    }
+
+    // 添加需密码标记
+    if (file.archiveInfo && file.archiveInfo.requiresPassword) {
+      name += ' ' + chalk.yellow('[需密码]');
+    }
+
+    return name;
+  };
+
+  // 处理分卷文件组
+  if (archiveFile.volumeGroup) {
+    const totalSize = archiveFile.volumeGroup.reduce((sum, f) => sum + (f.fileSize || 0), 0);
+    return {
+      displayName: truncateString(archiveFile.displayName || getDisplayName(archiveFile), 30),
+      displayFormat: getDisplayFormat(archiveFile.volumeGroup[0]),
+      size: formatSize(totalSize),
+      path: archiveFile.volumeGroup[0].directory || path.dirname(archiveFile.volumeGroup[0].filePath) || '',
+    };
+  }
+
   return {
-    displayName: truncateString(getDisplayName(archiveFile), 30),
+    displayName: truncateString(getDisplayNameWithVolumes(archiveFile), 30),
     displayFormat: getDisplayFormat(archiveFile),
     size: formatSize(archiveFile.fileSize || 0),
-    path: archiveFile.directory || archiveFile.filePath || ''
+    path: archiveFile.directory || path.dirname(archiveFile.filePath) || '',
   };
 }
 
@@ -327,6 +375,9 @@ function formatFileIcon(archiveFile) {
       }
     }
     return '📦 '; // Default volume icon
+  } else if (isMultiPartFile(archiveFile.fileName)) {
+    // 单个分卷文件也使用普通压缩包图标
+    return '📦 ';
   } else if (
     archiveFile.extension !== '.zip' &&
     archiveFile.extension !== '.rar' &&
@@ -343,6 +394,122 @@ function truncateString(str, maxLength) {
     return str;
   }
   return str.substring(0, maxLength - 3) + '...';
+}
+
+/**
+ * 判断是否是分卷文件
+ */
+function isMultiPartFile(fileName) {
+  const name = fileName.toLowerCase();
+  return (
+    /\.part\d+\.rar$/i.test(name) ||  // file.part01.rar
+    /\.part\d+$/i.test(name) ||       // file.part01
+    /\.\d{3}$/i.test(name) ||         // file.001
+    /\.z\d{2}$/i.test(name) ||        // file.z01
+    /\.r\d{2}$/i.test(name)           // file.r01
+  );
+}
+
+
+/**
+ * 分组分卷文件
+ */
+function groupVolumeFiles(files) {
+  const groups = [];
+  const processed = new Set();
+
+  files.forEach(file => {
+    if (processed.has(file.filePath)) return;
+
+    if (isMultiPartFile(file.fileName)) {
+      // 查找同组的分卷文件
+      const volumeGroup = findVolumeGroup(file, files);
+
+      if (volumeGroup.length > 1) {
+        // 创建分卷组
+        const baseName = getVolumeBaseName(volumeGroup[0].fileName);
+        const firstFile = volumeGroup[0];
+        const lastFile = volumeGroup[volumeGroup.length - 1];
+
+        // 获取分卷编号范围
+        const firstNum = getVolumeNumber(firstFile.fileName);
+        const lastNum = getVolumeNumber(lastFile.fileName);
+
+        groups.push({
+          ...firstFile,
+          volumeGroup: volumeGroup,
+          displayName: `${baseName}${firstNum}-${lastNum}`,
+          isVolume: true
+        });
+
+        // 标记所有分卷文件为已处理
+        volumeGroup.forEach(f => processed.add(f.filePath));
+      } else {
+        // 单个分卷文件
+        groups.push(file);
+        processed.add(file.filePath);
+      }
+    } else {
+      // 非分卷文件
+      groups.push(file);
+      processed.add(file.filePath);
+    }
+  });
+
+  return groups;
+}
+
+/**
+ * 查找同组的分卷文件
+ */
+function findVolumeGroup(file, allFiles) {
+  const baseName = getVolumeBaseName(file.fileName);
+  const dir = path.dirname(file.filePath);
+
+  return allFiles
+    .filter(f => {
+      if (path.dirname(f.filePath) !== dir) return false;
+      const fBaseName = getVolumeBaseName(f.fileName);
+      return fBaseName === baseName;
+    })
+    .sort((a, b) => {
+      const numA = getVolumeNumber(a.fileName);
+      const numB = getVolumeNumber(b.fileName);
+      return numA - numB;
+    });
+}
+
+/**
+ * 获取分卷文件的基础名称
+ */
+function getVolumeBaseName(fileName) {
+  return fileName
+    .replace(/\.part\d+\.rar$/i, '')
+    .replace(/\.part\d+$/i, '')
+    .replace(/\.\d{3}$/i, '')
+    .replace(/\.z\d{2}$/i, '')
+    .replace(/\.r\d{2}$/i, '');
+}
+
+/**
+ * 获取分卷编号
+ */
+function getVolumeNumber(fileName) {
+  let match;
+
+  if ((match = fileName.match(/\.part(\d+)\.rar$/i))) {
+    return match[1].padStart(3, '0');
+  } else if ((match = fileName.match(/\.part(\d+)$/i))) {
+    return match[1].padStart(3, '0');
+  } else if ((match = fileName.match(/\.(\d{3})$/i))) {
+    return match[1];
+  } else if ((match = fileName.match(/\.z(\d{2})$/i))) {
+    return '0' + match[1];
+  } else if ((match = fileName.match(/\.r(\d{2})$/i))) {
+    return '0' + match[1];
+  }
+
+  return '001';
 }
 
 export {

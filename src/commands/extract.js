@@ -6,6 +6,7 @@ import {
   scanForArchives,
   extractArchives
 } from '../core/archiveProcessor.js';
+import { isArchive } from '../core/sevenZip.js';
 import {
   displayScanResults,
   displayExtractionSummary,
@@ -23,21 +24,53 @@ async function extractCommand(scanPath, options) {
 
     // 扫描压缩文件
     console.log(chalk.blue('🔍 正在扫描压缩文件...'));
-    const archiveFiles = await scanForArchives(config.scanPath, {
-      recursive: config.recursive,
-      maxDepth: 10,
-      nestingLevel: 0
-    });
+
+    let archiveFiles = [];
+
+    // 检查路径是文件还是目录
+    const stats = await fs.stat(config.scanPath);
+
+    if (stats.isFile()) {
+      // 如果是文件，检查是否是压缩包
+      if (await isArchive(config.scanPath)) {
+        const fileStats = await fs.stat(config.scanPath);
+        archiveFiles = [{
+          fileName: path.basename(config.scanPath),
+          filePath: config.scanPath,
+          fileSize: fileStats.size,
+          extension: path.extname(config.scanPath).toLowerCase(),
+          nestingLevel: 0
+        }];
+      } else {
+        console.log(chalk.yellow('指定的文件不是有效的压缩包'));
+        return;
+      }
+    } else if (stats.isDirectory()) {
+      // 如果是目录，扫描目录中的压缩包
+      archiveFiles = await scanForArchives(config.scanPath, {
+        recursive: config.recursive,
+        maxDepth: 10,
+        nestingLevel: 0
+      });
+    } else {
+      console.log(chalk.yellow('指定的路径既不是文件也不是目录'));
+      return;
+    }
 
     if (archiveFiles.length === 0) {
       console.log(chalk.yellow('未找到压缩文件'));
       return;
     }
 
-    console.log(chalk.green(`✓ 发现 ${archiveFiles.length} 个压缩文件\n`));
 
     // 显示扫描结果
-    displayScanResults(archiveFiles);
+    await displayScanResults(archiveFiles);
+
+    // 如果是仅扫描模式，显示结果后直接返回
+    if (config.scanOnly) {
+      console.log(chalk.cyan('\n✓ 扫描完成'));
+      return;
+    }
 
     // 创建输出目录
     await fs.mkdir(config.destination, { recursive: true });
@@ -46,7 +79,8 @@ async function extractCommand(scanPath, options) {
     const allPasswords = await getAllPasswordsCombined(config.passwords);
 
     // 解压文件
-    console.log('');
+    console.log(chalk.blue('⏱ 解压文件进度：'));
+
     const startTime = Date.now();
     const results = await extractAllArchives(archiveFiles, config, allPasswords);
 
@@ -96,6 +130,7 @@ function validateAndNormalizeOptions(scanPath, options) {
     passwords,
     recursive: options.recursive !== false,
     keep: options.keep || false,
+    scanOnly: options.scanOnly || false,
     verbose: options.verbose || false,
     detectMerged: options.detectMerged || false,
     keepCarrier: options.keepCarrier || false,
@@ -134,39 +169,40 @@ async function extractAllArchives(archiveFiles, config, passwords) {
     onArchiveStart: (archive, _current, _total) => {
       // 每个压缩包开始时的回调
       console.log(chalk.blue(`\n📦 ${archive.fileName}`));
-
-      // 如果是分卷或伪装文件，显示特殊标记
-      if (archive.fileName.match(/\.(part\d+\.rar|z\d{2}|\d{3})$/i)) {
-        console.log(chalk.gray('├─ 📚 分卷压缩包'));
-      } else if (archive.extension && !archive.extension.match(/\.(zip|rar|7z|tar|gz)$/i)) {
-        console.log(chalk.gray('├─ 🎭 伪装压缩包'));
-      }
     },
     onArchiveComplete: (result, _current, _total) => {
       // 每个压缩包完成时的回调
       if (result.success) {
+        // 显示解压成功信息
+        console.log(chalk.gray(`├─ 解压${result.archive.fileName}成功`));
+
+        // 如果有嵌套压缩包，显示嵌套包信息
+        if (result.nestedArchives && result.nestedArchives.length > 0) {
+          result.nestedArchives.forEach((nested) => {
+            if (nested.success) {
+              console.log(chalk.gray(`├─ 发现嵌套包[${nested.archive.fileName}]，解压[${nested.archive.fileName}]成功`));
+            } else {
+              console.log(chalk.red(`├─ 发现嵌套包[${nested.archive.fileName}]，解压[${nested.archive.fileName}]失败`));
+            }
+          });
+          // 显示清理临时文件信息
+          console.log(chalk.gray('├─ 清理嵌套临时文件'));
+        }
+
+        // 最后显示总体成功信息
         let successMsg = '└─ ✓ 解压成功';
         if (result.usedPassword) {
-          successMsg += ` 🔐 ${maskPassword(result.usedPassword)}`;
+          successMsg += ` 🔐 ${result.usedPassword}`;
         }
         successMsg += ` (耗时: ${(result.duration || 0).toFixed(1)}s)`;
         console.log(chalk.green(successMsg));
-        if (result.nestedArchives && result.nestedArchives.length > 0) {
-          result.nestedArchives.forEach((nested, index) => {
-            const isLast = index === result.nestedArchives.length - 1;
-            const prefix = isLast ? '   └─' : '   ├─';
-            if (nested.success) {
-              console.log(chalk.cyan(`${prefix} 🔄 ${nested.archive.fileName} ✓`));
-            } else {
-              console.log(chalk.red(`${prefix} 🔄 ${nested.archive.fileName} ✗`));
-            }
-          });
-        }
       } else {
-        console.log(chalk.red('└─ ✗ 解压失败'));
+        // 解压失败的情况
+        console.log(chalk.red(`├─ 解压${result.archive.fileName}失败`));
         if (result.error) {
-          console.log(chalk.gray(`   原因: ${result.error}`));
+          console.log(chalk.gray(`├─ 原因: ${result.error}`));
         }
+        console.log(chalk.red('└─ ✗ 解压失败'));
       }
     },
     onNestedFound: (_nestedArchive, _depth) => {
@@ -236,19 +272,6 @@ async function handleFileCleanup(results, config) {
 
     console.log(chalk.green(`✓ 已删除 ${deletedCount} 个压缩文件`));
   }
-}
-
-/**
- * 遮罩密码显示
- */
-function maskPassword(password) {
-  if (!password || password.length <= 2) {
-    return '****';
-  }
-  const firstChar = password[0];
-  const lastChar = password[password.length - 1];
-  const middleMask = '*'.repeat(Math.min(password.length - 2, 4));
-  return `${firstChar}${middleMask}${lastChar}`;
 }
 
 export default extractCommand;

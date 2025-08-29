@@ -30,7 +30,6 @@ export async function scanForArchives(dirPath, options = {}) {
         const isRealContent = await checkIfRealContent(currentDir, items);
 
         if (isRealContent) {
-          console.log(`[嵌套层级 ${currentNestingLevel}] 检测到真实内容目录，停止深度扫描: ${currentDir}`);
           return; // 不再递归子目录
         }
       }
@@ -42,13 +41,24 @@ export async function scanForArchives(dirPath, options = {}) {
         if (item.isFile()) {
           if (await isArchive(fullPath)) {
             const stat = await fs.stat(fullPath);
-            archives.push({
+            const archiveInfo = {
               fileName: item.name,
               filePath: fullPath,
               fileSize: stat.size,
               extension: path.extname(item.name).toLowerCase(),
               nestingLevel: currentNestingLevel
-            });
+            };
+
+            // 如果是分卷文件，查找所有相关分卷
+            if (isMultiPartArchive(item.name)) {
+              const allVolumes = await findAllVolumeFiles(currentDir, item.name);
+              if (allVolumes.length > 1) {
+                archiveInfo.volumeFiles = allVolumes;
+                archiveInfo.isFirstVolume = true;
+              }
+            }
+
+            archives.push(archiveInfo);
           }
         } else if (item.isDirectory() && recursive) {
           await scanDir(fullPath, currentNestingLevel);
@@ -61,6 +71,74 @@ export async function scanForArchives(dirPath, options = {}) {
 
   await scanDir(dirPath, nestingLevel);
   return archives;
+}
+
+/**
+ * 判断是否是分卷压缩包
+ */
+function isMultiPartArchive(fileName) {
+  const name = fileName.toLowerCase();
+  return (
+    /\.part\d+\.rar$/i.test(name) ||  // file.part01.rar
+    /\.part\d+$/i.test(name) ||       // file.part01
+    /\.\d{3}$/i.test(name) ||         // file.001
+    /\.z\d{2}$/i.test(name) ||        // file.z01
+    /\.r\d{2}$/i.test(name)           // file.r01
+  );
+}
+
+/**
+ * 查找目录中所有相关的分卷文件
+ */
+async function findAllVolumeFiles(dir, firstVolumeFileName) {
+  const baseName = getVolumeBaseName(firstVolumeFileName);
+  const files = await fs.readdir(dir);
+
+  const volumeFiles = files
+    .filter(f => {
+      const fBaseName = getVolumeBaseName(f);
+      return fBaseName === baseName && isMultiPartArchive(f);
+    })
+    .sort((a, b) => {
+      const numA = getVolumeNumber(a);
+      const numB = getVolumeNumber(b);
+      return numA.localeCompare(numB);
+    });
+
+  return volumeFiles;
+}
+
+/**
+ * 获取分卷文件的基础名称
+ */
+function getVolumeBaseName(fileName) {
+  return fileName
+    .replace(/\.part\d+\.rar$/i, '')
+    .replace(/\.part\d+$/i, '')
+    .replace(/\.\d{3}$/i, '')
+    .replace(/\.z\d{2}$/i, '')
+    .replace(/\.r\d{2}$/i, '');
+}
+
+/**
+ * 获取分卷编号
+ */
+function getVolumeNumber(fileName) {
+  let match;
+
+  if ((match = fileName.match(/\.part(\d+)\.rar$/i))) {
+    return match[1].padStart(3, '0');
+  } else if ((match = fileName.match(/\.part(\d+)$/i))) {
+    return match[1].padStart(3, '0');
+  } else if ((match = fileName.match(/\.(\d{3})$/i))) {
+    return match[1];
+  } else if ((match = fileName.match(/\.z(\d{2})$/i))) {
+    return '0' + match[1];
+  } else if ((match = fileName.match(/\.r(\d{2})$/i))) {
+    return '0' + match[1];
+  }
+
+  return '001';
 }
 
 /**
