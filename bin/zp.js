@@ -37,6 +37,7 @@ async function main() {
         '保留原始压缩文件（跳过删除确认）',
         false
       )
+      .option('-s, --scan-only', '仅扫描压缩包，不执行解压')
       .option('--no-color', '禁用彩色输出')
       .option('-v, --verbose', '显示详细日志')
       .option(
@@ -66,9 +67,8 @@ async function main() {
   }
 }
 
-// ESM equivalent of require.main === module
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
-}
-
-export { main };
+// 直接执行 main 函数
+main().catch(error => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
