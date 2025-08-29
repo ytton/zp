@@ -4,6 +4,7 @@
   "description": "Cross-platform batch archive extraction tool with multi-password support and nested extraction",
   "type": "module",
   "main": "bin/zp.js",
+  "private": false,
   "bin": {
     "zp": "./bin/zp.js"
   },
@@ -52,11 +53,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yton/zp.git"
+    "url": "git+https://github.com/ytton/zp.git"
   },
   "bugs": {
-    "url": "https://github.com/yton/zp/issues"
+    "url": "https://github.com/ytton/zp/issues"
   },
-  "homepage": "https://github.com/yton/zp#readme",
+  "homepage": "https://github.com/ytton/zp#readme",
   "preferGlobal": true
 }
