@@ -1,462 +1,224 @@
-const { exec, spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs');
-const { checkSystemRequirements } = require('../utils/system');
-const { ErrorFactory } = require('./errors');
+import _7z from '7zip-min';
+import sevenZipBin from '7zip-bin-full';
+import { promises as fs } from 'fs';
+
+// 配置使用 7zip-bin-full 的路径
+_7z.config({
+  binaryPath: sevenZipBin.path7z,
+});
 
 /**
- * 7z command wrapper for archive operations
+ * 检查文件是否为有效的压缩包
  */
-class SevenZipWrapper {
-  constructor() {
-    this.sevenZipPath = null;
-    this.isInitialized = false;
-  }
-
-  /**
-   * Initialize 7z wrapper
-   */
-  async initialize() {
-    if (this.isInitialized) {
-      return;
-    }
-
-    try {
-      const systemInfo = await checkSystemRequirements();
-      this.sevenZipPath = systemInfo.sevenZipPath;
-      this.isInitialized = true;
-    } catch (error) {
-      throw ErrorFactory.no7Zip();
-    }
-  }
-
-  /**
-   * Test archive integrity
-   */
-  async testArchive(archivePath, password = null) {
-    await this.initialize();
-
-    const command = this._buildCommand('t', archivePath, null, password, {
-      listFormat: false,
-      overwrite: false
-    });
-
-    return new Promise((resolve, reject) => {
-      exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
-        // Check for password prompts and errors
-        const passwordIndicators = [
-          'Enter password',
-          'Wrong password', 
-          'Data Error in encrypted file'
-        ];
-        
-        const hasPasswordError = passwordIndicators.some(indicator => 
-          stdout.includes(indicator) || stderr.includes(indicator)
-        );
-        
-        if (hasPasswordError) {
-          resolve({ success: false, error: 'wrong_password' });
-          return;
-        }
-        
-        if (error) {
-          if (stderr.includes('Wrong password') || stdout.includes('Wrong password')) {
-            resolve({ success: false, error: 'wrong_password' });
-          } else if (stderr.includes('Data Error') || stdout.includes('Data Error')) {
-            resolve({ success: false, error: 'corrupted' });
-          } else {
-            resolve({ success: false, error: 'unknown', details: stderr || stdout });
-          }
-          return;
-        }
-
-        if (stdout.includes('Everything is Ok')) {
-          resolve({ success: true });
-        } else {
-          resolve({ success: false, error: 'test_failed', details: stdout });
-        }
-      });
-    });
-  }
-
-  /**
-   * List archive contents
-   */
-  async listArchive(archivePath, password = null) {
-    await this.initialize();
-
-    const command = this._buildCommand('l', archivePath, null, password, {
-      listFormat: true,
-      technical: true
-    });
-
-    return new Promise((resolve, reject) => {
-      exec(command, { timeout: 15000 }, (error, stdout, stderr) => {
-        if (error) {
-          reject(ErrorFactory.extractionFailed(archivePath, stderr || error.message));
-          return;
-        }
-
-        try {
-          const fileList = this._parseFileList(stdout);
-          const archiveInfo = this._parseArchiveInfo(stdout);
-          
-          resolve({
-            files: fileList,
-            info: archiveInfo,
-            totalFiles: fileList.length,
-            totalSize: fileList.reduce((sum, file) => sum + file.size, 0)
-          });
-        } catch (parseError) {
-          reject(ErrorFactory.extractionFailed(archivePath, parseError.message));
-        }
-      });
-    });
-  }
-
-  /**
-   * Extract archive to destination
-   */
-  async extractArchive(archivePath, outputPath, password = null, options = {}) {
-    await this.initialize();
-
-    const {
-      overwrite = true,
-      preservePaths = true,
-      onProgress = null,
-      specificFiles = null
-    } = options;
-
-    // Ensure output directory exists
-    if (!fs.existsSync(outputPath)) {
-      fs.mkdirSync(outputPath, { recursive: true });
-    }
-
-    const command = this._buildCommand('x', archivePath, outputPath, password, {
-      overwrite,
-      preservePaths,
-      specificFiles
-    });
-
-    return new Promise((resolve, reject) => {
-      if (onProgress) {
-        // Use spawn for progress monitoring
-        this._extractWithProgress(command, onProgress, resolve, reject);
-      } else {
-        // Use exec for simple extraction
-        exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
-          // Check for password prompts and password-related errors
-          const passwordIndicators = [
-            'Enter password',
-            'Wrong password',
-            'Data Error in encrypted file'
-          ];
-          
-          const hasPasswordError = passwordIndicators.some(indicator => 
-            stdout.includes(indicator) || stderr.includes(indicator)
-          );
-          
-          if (hasPasswordError) {
-            reject(ErrorFactory.extractionFailed(archivePath, 'Wrong password'));
-            return;
-          }
-          
-          if (error) {
-            if (stderr.includes('Wrong password') || stdout.includes('Wrong password')) {
-              reject(ErrorFactory.extractionFailed(archivePath, 'Wrong password'));
-            } else {
-              reject(ErrorFactory.extractionFailed(archivePath, stderr || error.message));
-            }
-            return;
-          }
-
-          if (stdout.includes('Everything is Ok')) {
-            const extractedFiles = this._parseExtractedFiles(stdout);
-            resolve({
-              success: true,
-              outputPath,
-              extractedFiles
-            });
-          } else {
-            reject(ErrorFactory.extractionFailed(archivePath, 'Extraction completed with warnings'));
-          }
-        });
-      }
-    });
-  }
-
-  /**
-   * Extract with progress monitoring
-   */
-  _extractWithProgress(command, onProgress, resolve, reject) {
-    // Parse command properly, handling quoted arguments
-    const parts = this._parseCommand(command);
-    const executable = parts[0];
-    const args = parts.slice(1);
-    
-    const child = spawn(executable, args);
-
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      const output = data.toString();
-      stdout += output;
-      
-      // Parse progress information
-      const progressMatch = output.match(/(\d+)%/);
-      if (progressMatch && onProgress) {
-        const percentage = parseInt(progressMatch[1]);
-        onProgress(percentage);
-      }
-    });
-
-    child.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      stderr += stderrChunk;
-    });
-
-    child.on('close', (code) => {
-      // Check for password prompts and errors in output
-      const passwordIndicators = [
-        'Enter password',
-        'Wrong password',
-        'Data Error in encrypted file'
-      ];
-      
-      const hasPasswordError = passwordIndicators.some(indicator => 
-        stdout.includes(indicator) || stderr.includes(indicator)
-      );
-      
-      if (hasPasswordError) {
-        reject(ErrorFactory.extractionFailed('archive', 'Wrong password'));
-        return;
-      }
-      
-      if (code === 0 && stdout.includes('Everything is Ok')) {
-        const extractedFiles = this._parseExtractedFiles(stdout);
-        resolve({
-          success: true,
-          extractedFiles
-        });
-      } else {
-        reject(ErrorFactory.extractionFailed('archive', stderr || `Process exited with code ${code}`));
-      }
-    });
-
-    child.on('error', (error) => {
-      reject(ErrorFactory.extractionFailed('archive', error.message));
-    });
-  }
-
-  /**
-   * Parse command string with quoted arguments
-   */
-  _parseCommand(command) {
-    const parts = [];
-    let current = '';
-    let inQuotes = false;
-    
-    for (let i = 0; i < command.length; i++) {
-      const char = command[i];
-      
-      if (char === '"' && (i === 0 || command[i-1] !== '\\')) {
-        inQuotes = !inQuotes;
-      } else if (char === ' ' && !inQuotes) {
-        if (current.trim()) {
-          parts.push(current.trim());
-          current = '';
-        }
-      } else {
-        current += char;
-      }
-    }
-    
-    if (current.trim()) {
-      parts.push(current.trim());
-    }
-    
-    return parts;
-  }
-
-  /**
-   * Build 7z command
-   */
-  _buildCommand(operation, archivePath, outputPath = null, password = null, options = {}) {
-    const cmd = this.sevenZipPath === '7z' ? '7z' : `"${this.sevenZipPath}"`;
-    let command = `${cmd} ${operation}`;
-
-    // Add archive path
-    command += ` "${archivePath}"`;
-
-    // Add output path for extraction
-    if (outputPath && (operation === 'x' || operation === 'e')) {
-      command += ` -o"${outputPath}"`;
-    }
-
-    // Add password
-    if (password) {
-      command += ` -p"${password}"`;
-    }
-
-    // Add options
-    if (options.overwrite) {
-      command += ' -aoa'; // Overwrite all
-    } else {
-      command += ' -aos'; // Skip existing
-    }
-
-    if (options.listFormat) {
-      command += ' -slt'; // Technical format
-    }
-
-    if (options.preservePaths === false) {
-      command += ' -e'; // Extract without folder structure
-    }
-
-    if (options.specificFiles && Array.isArray(options.specificFiles)) {
-      options.specificFiles.forEach(file => {
-        command += ` "${file}"`;
-      });
-    }
-
-    // Always add basic options
-    command += ' -bb1'; // Set output log level
-    command += ' -y';   // Assume Yes on all queries
-
-    return command;
-  }
-
-  /**
-   * Parse file list from 7z output
-   */
-  _parseFileList(output) {
-    const files = [];
-    const lines = output.split('\n');
-    
-    let inFileSection = false;
-    let currentFile = {};
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      
-      if (trimmedLine.startsWith('Path = ')) {
-        if (Object.keys(currentFile).length > 0) {
-          files.push(currentFile);
-        }
-        currentFile = {
-          path: trimmedLine.substring(7),
-          name: '',
-          size: 0,
-          isDirectory: false,
-          modified: null
-        };
-        inFileSection = true;
-      } else if (inFileSection) {
-        if (trimmedLine.startsWith('Size = ')) {
-          currentFile.size = parseInt(trimmedLine.substring(7)) || 0;
-        } else if (trimmedLine.startsWith('Folder = ')) {
-          currentFile.isDirectory = trimmedLine.substring(9) === '+';
-        } else if (trimmedLine.startsWith('Modified = ')) {
-          currentFile.modified = trimmedLine.substring(11);
-        }
-      }
-    }
-
-    if (Object.keys(currentFile).length > 0) {
-      files.push(currentFile);
-    }
-
-    // Set file names
-    files.forEach(file => {
-      file.name = path.basename(file.path);
-    });
-
-    return files;
-  }
-
-  /**
-   * Parse archive information
-   */
-  _parseArchiveInfo(output) {
-    const info = {
-      type: 'unknown',
-      method: 'unknown',
-      solid: false,
-      encrypted: false,
-      comment: ''
-    };
-
-    const lines = output.split('\n');
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      
-      if (trimmedLine.startsWith('Type = ')) {
-        info.type = trimmedLine.substring(7);
-      } else if (trimmedLine.startsWith('Method = ')) {
-        info.method = trimmedLine.substring(9);
-      } else if (trimmedLine.startsWith('Solid = ')) {
-        info.solid = trimmedLine.substring(8) === '+';
-      } else if (trimmedLine.includes('Encrypted')) {
-        info.encrypted = true;
-      }
-    }
-
-    return info;
-  }
-
-  /**
-   * Parse extracted files from output
-   */
-  _parseExtractedFiles(output) {
-    const files = [];
-    const lines = output.split('\n');
-    
-    // Look for extraction patterns in 7z output
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      
-      // Primary pattern: "- filename" (most common in 7z 17.05)
-      if (trimmedLine.startsWith('- ') && 
-          !trimmedLine.includes('archive:') && 
-          !trimmedLine.includes('Testing') &&
-          !trimmedLine.includes('listing')) {
-        const filePath = trimmedLine.substring(2);
-        if (filePath && filePath.length > 0) {
-          files.push(filePath);
-        }
-      }
-      // Secondary pattern: "Extracting filename" (some versions)
-      else if ((line.includes('Extracting  ') || line.includes('Extracting ')) &&
-               !line.includes('archive:')) {
-        const filePath = line.substring(line.indexOf('Extracting') + 11).trim();
-        if (filePath && !filePath.includes('...')) {
-          files.push(filePath);
-        }
-      }
-    }
-
-    // If no files found but extraction was successful, return placeholder
-    if (files.length === 0 && output.includes('Everything is Ok')) {
-      return ['[extraction completed successfully]'];
-    }
-
-    // Clean up and return unique valid file paths
-    return [...new Set(files)].filter(file => 
-      file.length > 0 && 
-      file.length < 500 && // Reasonable path length limit
-      !file.includes('ERROR') &&
-      !file.includes('WARNING') &&
-      !file.match(/^[A-Z][\w\s]*:/) && // Skip header lines like "Type = 7z"
-      !file.includes('p7zip Version') // Skip version info
-    );
+export async function isArchive(filePath) {
+  try {
+    const info = await getArchiveInfo(filePath);
+    return info.isValid;
+  } catch {
+    return false;
   }
 }
 
-// Export singleton instance
-const sevenZip = new SevenZipWrapper();
+/**
+ * 获取压缩包信息
+ */
+export async function getArchiveInfo(filePath) {
+  try {
+    // 使用 -t 命令测试压缩包完整性并获取详细信息
+    // 添加 -p"" 提供空密码，让加密文件快速报错而不等待交互
+    const output = await _7z.cmd(['t', filePath, '-slt', '-p""']);
 
-module.exports = {
-  SevenZipWrapper,
-  sevenZip
+    // 解析 7z 输出
+    const info = parseArchiveTestOutput(output);
+
+    return {
+      isValid: true,
+      isEncrypted: info.isEncrypted,
+      requiresPassword: false,
+      format: info.format,
+      totalSize: info.totalSize,
+      compressedSize: info.compressedSize,
+      fileCount: info.fileCount,
+    };
+  } catch (err) {
+    const errorMsg = err.message || err.toString();
+    // console.warn('7z error message:', errorMsg);
+
+    // 即使出错，也尝试解析输出中的基本信息
+    let info = null;
+    if (err.output || errorMsg) {
+      const output = err.output || errorMsg;
+      info = parseArchiveTestOutput(output);
+    }
+
+    // 检查是否为密码错误
+    if (
+      errorMsg.includes('Wrong password') ||
+      errorMsg.includes('Enter password') ||
+      errorMsg.includes('Cannot open encrypted archive') ||
+      errorMsg.includes('Data Error in encrypted file') ||
+      errorMsg.includes('Data error')
+    ) {
+      return {
+        isValid: true,
+        isEncrypted: true,
+        requiresPassword: true,
+        format: info ? info.format : 'UNKNOWN',
+        totalSize: info ? info.totalSize : 0,
+        compressedSize: info ? info.compressedSize : 0,
+        fileCount: info ? info.fileCount : 0,
+      };
+    }
+
+    return {
+      isValid: false,
+      error: errorMsg,
+      format: info ? info.format : 'UNKNOWN',
+      compressedSize: info ? info.compressedSize : 0,
+    };
+  }
+}
+
+/**
+ * 解析 7z test 命令的输出
+ */
+function parseArchiveTestOutput(output) {
+  const lines = output.split('\n');
+  const info = {
+    format: 'UNKNOWN',
+    isEncrypted: false,
+    totalSize: 0,
+    compressedSize: 0,
+    fileCount: 0,
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // 提取压缩包格式: "Type = zip"
+    if (trimmed.startsWith('Type = ')) {
+      info.format = trimmed.split(' = ')[1].toUpperCase();
+    }
+
+    // 提取物理大小: "Physical Size = 337"
+    if (trimmed.startsWith('Physical Size = ')) {
+      info.compressedSize = parseInt(trimmed.split(' = ')[1]) || 0;
+    }
+
+    // 检查是否加密 - 通常出现在错误输出中
+    if (trimmed.includes('encrypted') || trimmed.includes('Wrong password')) {
+      info.isEncrypted = true;
+    }
+
+    // 提取文件数量: "Files: 2"
+    if (trimmed.startsWith('Files: ')) {
+      info.fileCount = parseInt(trimmed.split(': ')[1]) || 0;
+    }
+
+    // 提取原始大小: "Size:       55"
+    if (trimmed.startsWith('Size:')) {
+      const sizeStr = trimmed.split(':')[1].trim();
+      info.totalSize = parseInt(sizeStr) || 0;
+    }
+
+    // 提取压缩大小: "Compressed: 337" (如果没有Physical Size的话)
+    if (trimmed.startsWith('Compressed:') && info.compressedSize === 0) {
+      const compressedStr = trimmed.split(':')[1].trim();
+      info.compressedSize = parseInt(compressedStr) || 0;
+    }
+  }
+
+  return info;
+}
+
+/**
+ * 解压压缩包到指定目录
+ */
+export async function extractArchive(
+  archivePath,
+  outputDir,
+  password = null,
+  options = {}
+) {
+  const startTime = Date.now();
+
+  // 确保输出目录存在
+  await fs.mkdir(outputDir, { recursive: true });
+
+  // 进度回调设置
+  const progressCallback = options.onProgress;
+  let progressInterval;
+  let lastProgress = 0;
+
+  // 如果提供了回调，启动进度模拟
+  if (progressCallback) {
+    progressInterval = setInterval(() => {
+      lastProgress = Math.min(lastProgress + Math.random() * 10, 90);
+      progressCallback(Math.floor(lastProgress));
+    }, 500);
+  }
+
+  try {
+    let output;
+
+    if (password) {
+      // 使用 cmd 方法执行带密码的解压命令
+      const extractCommand = [
+        'x',
+        archivePath,
+        '-o' + outputDir,
+        '-p' + password,
+        '-y',
+      ];
+      output = await _7z.cmd(extractCommand);
+    } else {
+      // 即使没有密码，也使用 cmd 方法并提供空密码，避免交互等待
+      const extractCommand = [
+        'x',
+        archivePath,
+        '-o' + outputDir,
+        '-p""',
+        '-y',
+      ];
+      output = await _7z.cmd(extractCommand);
+    }
+
+    // 最终进度更新
+    if (progressCallback) {
+      progressCallback(100);
+    }
+
+    return {
+      success: true,
+      duration: (Date.now() - startTime) / 1000,
+      outputPath: outputDir,
+      output: output, // 7z 命令的输出信息
+    };
+  } catch (err) {
+    const errorMessage = err.message || err.toString();
+
+    // 检查密码错误
+    if (
+      errorMessage.includes('Wrong password') ||
+      errorMessage.includes('Enter password') ||
+      errorMessage.includes('Cannot open encrypted archive') ||
+      errorMessage.includes('Data error in encrypted file')
+    ) {
+      throw new Error(`密码错误: ${errorMessage}`);
+    }
+
+    throw new Error(`解压失败: ${errorMessage}`);
+  } finally {
+    // 清理进度定时器
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
+  }
+}
+
+// 默认导出，保持向后兼容
+export default {
+  isArchive,
+  getArchiveInfo,
+  extractArchive,
 };

@@ -1,14 +1,14 @@
-const chalk = require('chalk');
-const inquirer = require('inquirer');
-const {
+import chalk from 'chalk';
+import inquirer from 'inquirer';
+import {
   addPassword,
   removePassword,
   getAllPasswords,
-  clearAllPasswords
-} = require('../utils/passwordStore');
+  clearAllPasswords,
+} from '../utils/passwordStore.js';
 
 /**
- * Password management command handler
+ * 密码管理命令处理器
  */
 async function passwordCommand(options) {
   try {
@@ -17,87 +17,89 @@ async function passwordCommand(options) {
       await interactivePasswordManager();
       return;
     }
-    
+
     // Handle specific password operations
     if (options.add) {
       await handleAddPassword(options.add);
     }
-    
+
     if (options.delete) {
       await handleDeletePassword(options.delete);
     }
-    
+
     if (options.clear) {
       await handleClearAllPasswords();
     }
-    
+
     if (options.list) {
       await handleListPasswords();
     }
-    
   } catch (error) {
-    console.error(chalk.red('❌ Password management error:'), error.message);
+    console.error(chalk.red('❌ 密码管理错误:'), error.message);
     process.exit(1);
   }
 }
 
 /**
- * Check if any password-related option is provided
+ * 检查是否提供了任何密码相关选项
  */
 function hasAnyPasswordOption(options) {
   return options.add || options.delete || options.clear || options.list;
 }
 
 /**
- * Interactive password management interface
+ * 交互式密码管理界面
  */
 async function interactivePasswordManager() {
-  console.log(chalk.cyan('🔐 Password Library Manager'));
+  console.log(chalk.cyan('🔐 密码库管理器'));
   console.log('');
-  
+
   const choices = [
-    { name: '📝 Add new password', value: 'add' },
-    { name: '📋 List all passwords', value: 'list' },
-    { name: '🗑️  Delete password', value: 'delete' },
-    { name: '🧹 Clear all passwords', value: 'clear' },
-    { name: '❌ Exit', value: 'exit' }
+    { name: '📝 添加新密码', value: 'add' },
+    { name: '📋 列出所有密码', value: 'list' },
+    { name: '🗑️  删除密码', value: 'delete' },
+    { name: '🧹 清空所有密码', value: 'clear' },
+    { name: '❌ 退出', value: 'exit' },
   ];
-  
-  while (true) {
+
+  let shouldContinue = true;
+
+  while (shouldContinue) {
     const { action } = await inquirer.prompt([
       {
         type: 'list',
         name: 'action',
-        message: 'What would you like to do?',
-        choices
-      }
+        message: '请选择操作:',
+        choices,
+      },
     ]);
-    
+
     if (action === 'exit') {
+      shouldContinue = false;
+      continue;
+    }
+
+    switch (action) {
+    case 'add':
+      await promptAddPassword();
+      break;
+    case 'list':
+      await handleListPasswords();
+      break;
+    case 'delete':
+      await promptDeletePassword();
+      break;
+    case 'clear':
+      await promptClearAllPasswords();
       break;
     }
-    
-    switch (action) {
-      case 'add':
-        await promptAddPassword();
-        break;
-      case 'list':
-        await handleListPasswords();
-        break;
-      case 'delete':
-        await promptDeletePassword();
-        break;
-      case 'clear':
-        await promptClearAllPasswords();
-        break;
-    }
-    
+
     console.log('');
   }
 }
 
 /**
- * Add a password to the library
+ * 添加密码到密码库
  */
 async function handleAddPassword(password) {
   const result = addPassword(password);
@@ -109,26 +111,26 @@ async function handleAddPassword(password) {
 }
 
 /**
- * Prompt for password to add
+ * 提示输入要添加的密码
  */
 async function promptAddPassword() {
   const questions = [
     {
       type: 'password',
       name: 'password',
-      message: 'Enter password to add:',
-      mask: '*'
+      message: '请输入要添加的密码:',
+      mask: '*',
     },
     {
       type: 'input',
       name: 'label',
-      message: 'Enter optional label (press Enter to skip):',
-      default: ''
-    }
+      message: '请输入可选标签 (按回车跳过):',
+      default: '',
+    },
   ];
-  
+
   const { password, label } = await inquirer.prompt(questions);
-  
+
   if (password) {
     const result = addPassword(password, label);
     if (result.success) {
@@ -140,7 +142,7 @@ async function promptAddPassword() {
 }
 
 /**
- * Delete a password from the library
+ * 从密码库删除密码
  */
 async function handleDeletePassword(password) {
   const result = removePassword(password);
@@ -152,46 +154,46 @@ async function handleDeletePassword(password) {
 }
 
 /**
- * Prompt for password to delete
+ * 提示选择要删除的密码
  */
 async function promptDeletePassword() {
   const passwords = getAllPasswords();
-  
+
   if (passwords.length === 0) {
-    console.log(chalk.yellow('⚠️  No passwords stored yet'));
+    console.log(chalk.yellow('⚠️  还没有存储任何密码'));
     return;
   }
-  
+
   const choices = passwords.map(p => ({
-    name: `${maskPassword(p.value)} ${p.label ? `(${p.label})` : ''} - Used ${p.usageCount} times`,
-    value: p.value
+    name: `${maskPassword(p.value)} ${p.label ? `(${p.label})` : ''} - 使用 ${p.usageCount} 次`,
+    value: p.value,
   }));
-  
+
   const { passwordToDelete } = await inquirer.prompt([
     {
       type: 'list',
       name: 'passwordToDelete',
-      message: 'Select password to delete:',
-      choices
-    }
+      message: '请选择要删除的密码:',
+      choices,
+    },
   ]);
-  
+
   const { confirm } = await inquirer.prompt([
     {
       type: 'confirm',
       name: 'confirm',
-      message: `Are you sure you want to delete this password?`,
-      default: false
-    }
+      message: '确定要删除这个密码吗?',
+      default: false,
+    },
   ]);
-  
+
   if (confirm) {
     await handleDeletePassword(passwordToDelete);
   }
 }
 
 /**
- * Clear all passwords from the library
+ * 清空密码库中的所有密码
  */
 async function handleClearAllPasswords() {
   const result = clearAllPasswords();
@@ -203,70 +205,78 @@ async function handleClearAllPasswords() {
 }
 
 /**
- * Prompt for confirmation before clearing all passwords
+ * 清空所有密码前的确认提示
  */
 async function promptClearAllPasswords() {
   const passwords = getAllPasswords();
-  
+
   if (passwords.length === 0) {
-    console.log(chalk.yellow('⚠️  No passwords stored yet'));
+    console.log(chalk.yellow('⚠️  还没有存储任何密码'));
     return;
   }
-  
-  console.log(chalk.yellow(`⚠️  This will delete ${passwords.length} stored passwords`));
-  
+
+  console.log(
+    chalk.yellow(`⚠️  这将删除 ${passwords.length} 个存储的密码`)
+  );
+
   const { confirm } = await inquirer.prompt([
     {
       type: 'confirm',
       name: 'confirm',
-      message: 'Are you sure you want to clear all passwords?',
-      default: false
-    }
+      message: '确定要清空所有密码吗?',
+      default: false,
+    },
   ]);
-  
+
   if (confirm) {
     await handleClearAllPasswords();
   }
 }
 
 /**
- * List all stored passwords (masked)
+ * 列出所有存储的密码（遮罩显示）
  */
 async function handleListPasswords() {
   const passwords = getAllPasswords();
-  
+
   if (passwords.length === 0) {
-    console.log(chalk.yellow('⚠️  No passwords stored yet'));
+    console.log(chalk.yellow('⚠️  还没有存储任何密码'));
     return;
   }
-  
-  console.log(chalk.blue('📋 Stored Passwords:'));
+
+  console.log(chalk.blue('📋 存储的密码:'));
   console.log('');
-  
+
   passwords.forEach((p, index) => {
     const maskedPassword = maskPassword(p.value);
     const label = p.label ? chalk.gray(`(${p.label})`) : '';
-    const usage = chalk.gray(`Used: ${p.usageCount} times`);
-    const added = chalk.gray(`Added: ${new Date(p.addedAt).toLocaleDateString()}`);
-    
+    const usage = chalk.gray(`使用: ${p.usageCount} 次`);
+    const added = chalk.gray(
+      `添加: ${new Date(p.addedAt).toLocaleDateString()}`
+    );
+
     console.log(`${index + 1}. ${chalk.cyan(maskedPassword)} ${label}`);
     console.log(`   ${usage}, ${added}`);
   });
 }
 
 /**
- * Mask password for display purposes
+ * 遮罩密码用于显示
  */
 function maskPassword(password) {
   if (!password || password.length === 0) {
     return '';
   }
-  
+
   if (password.length <= 2) {
     return '*'.repeat(password.length);
   }
-  
-  return password[0] + '*'.repeat(password.length - 2) + password[password.length - 1];
+
+  return (
+    password[0] +
+    '*'.repeat(password.length - 2) +
+    password[password.length - 1]
+  );
 }
 
-module.exports = passwordCommand;
+export default passwordCommand;

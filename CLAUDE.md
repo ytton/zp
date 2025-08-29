@@ -59,7 +59,7 @@ zp/
 - Target platforms: Windows, macOS, Linux (Node.js >=14)
 - Primary dependency: 7-Zip must be installed
 - Windows: Registry check `HKEY_LOCAL_MACHINE\\SOFTWARE\\7-Zip` or standard paths
-- macOS: Homebrew `/opt/homebrew/bin/7z`, MacPorts `/opt/local/bin/7z`, or standard paths  
+- macOS: Homebrew `/opt/homebrew/bin/7z`, MacPorts `/opt/local/bin/7z`, or standard paths
 - Linux: Standard system paths `/usr/bin/7z`, `/usr/local/bin/7z`
 - Temp directory: `%TEMP%\\zp` (Windows) or `/tmp/zp` (Unix)
 - Config location: `%APPDATA%\\.zp\\config.json` (Windows) or `~/.zp/config.json` (Unix)
@@ -126,6 +126,7 @@ zp/
 ### 当前阶段 (Current Phase) 🔄
 
 **核心功能验证和优化** - 所有基础功能已完成并可正常工作
+
 - ✅ 单文件提取测试通过
 - ✅ 文件解析逻辑修复 (7z 17.05 兼容)
 - ✅ 命令参数解析优化 (spawn + quoted paths)
@@ -145,7 +146,7 @@ zp/
 
 3. **拼接文件检测** - 最后实现 (按用户要求)
    - 图片+压缩文件检测
-   - 视频+压缩文件检测  
+   - 视频+压缩文件检测
    - 二进制特征分析
    - 载体文件分离
 
@@ -158,8 +159,9 @@ zp/
 ### 测试覆盖 (Test Coverage) 🧪
 
 **已测试场景:**
+
 - ✅ 7z 格式单文件提取
-- ✅ ZIP 格式单文件提取  
+- ✅ ZIP 格式单文件提取
 - ✅ 无密码文件处理
 - ✅ 密码保护 ZIP 文件提取
 - ✅ 密码保护 7z 文件提取
@@ -170,8 +172,9 @@ zp/
 - ✅ 用户界面显示和进度反馈
 
 **待测试场景:**
+
 - 🔄 RAR 格式支持 (依赖7z引擎)
-- 🔄 分卷文件处理  
+- 🔄 分卷文件处理
 - 🔄 嵌套文件提取
 - 🔄 大文件处理性能
 - 🔄 边缘错误场景处理
@@ -179,6 +182,7 @@ zp/
 ### 密码处理增强 🔐
 
 **新增功能:**
+
 - ✅ 智能密码错误检测 - 支持多种7z输出格式
 - ✅ ZIP格式密码提示检测 (`Enter password`)
 - ✅ 7z格式加密错误检测 (`Data Error in encrypted file`)

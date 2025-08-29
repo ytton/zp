@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__fetcher__fetch_url"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

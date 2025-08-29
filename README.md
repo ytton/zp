@@ -9,7 +9,7 @@ A powerful CLI tool for batch extraction of archive files with advanced features
 
 - **🗂️ Batch Processing** - Extract multiple archives simultaneously
 - **🔐 Multi-Password Support** - Try multiple passwords automatically
-- **🔄 Recursive Extraction** - Handle nested archives seamlessly  
+- **🔄 Recursive Extraction** - Handle nested archives seamlessly
 - **📦 Multi-Volume Support** - Process split archives (.001, .part1.rar, etc.)
 - **🖼️ Merged File Detection** - Extract archives hidden in images/videos
 - **📊 Progress Tracking** - Real-time progress bars and statistics
@@ -88,6 +88,7 @@ zp ./archives --no-color
 ## 📸 Interface Preview
 
 ### Scanning Phase
+
 ```
 🔍 正在扫描压缩文件...
 ✓ 发现 4 个压缩文件
@@ -103,6 +104,7 @@ zp ./archives --no-color
 ```
 
 ### Extraction Progress
+
 ```
 📦 archive.rar
 ├─ 🔐 尝试密码: ****
@@ -128,7 +130,8 @@ zp ./archives --no-color
 
 ## ⚙️ Configuration
 
-Configuration file location: 
+Configuration file location:
+
 - **Windows**: `%APPDATA%\.zp\config.json`
 - **macOS/Linux**: `~/.zp/config.json`
 
@@ -154,15 +157,15 @@ Configuration file location:
 
 ## 🚨 Error Handling
 
-| Error Code | Description | Solution |
-|------------|-------------|----------|
-| E001 | 7-Zip not found | Install 7-Zip from official website |
-| E002 | Invalid path | Check path exists and is accessible |
-| E003 | No archives found | Ensure archives exist in specified path |
-| E004 | Extraction failed | Try different passwords or check file integrity |
-| E005 | Missing volume | Ensure all volume files are present |
-| E006 | Corrupted file | File may be damaged or incomplete |
-| E007 | Insufficient space | Free up disk space |
+| Error Code | Description        | Solution                                        |
+| ---------- | ------------------ | ----------------------------------------------- |
+| E001       | 7-Zip not found    | Install 7-Zip from official website             |
+| E002       | Invalid path       | Check path exists and is accessible             |
+| E003       | No archives found  | Ensure archives exist in specified path         |
+| E004       | Extraction failed  | Try different passwords or check file integrity |
+| E005       | Missing volume     | Ensure all volume files are present             |
+| E006       | Corrupted file     | File may be damaged or incomplete               |
+| E007       | Insufficient space | Free up disk space                              |
 
 ## 🛠️ Development
 
